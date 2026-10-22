@@ -1,0 +1,71 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $ic := .Values.networkPolicy.ingressController -}}
+# 1) Default deny: no pod in this namespace accepts traffic unless a policy below allows it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-default-deny-ingress
+  labels: {{- include "urumi.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# 2) Public entry points: only the Ingress controller may reach the gateway and dashboard.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-public-entrypoints
+  labels: {{- include "urumi.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [gateway, dashboard]
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $ic.namespace }}
+          podSelector:
+            matchLabels: {{- toYaml $ic.podLabels | nindent 14 }}
+---
+# 3) Upstream MCP servers: only the gateway (label urumi.dev/mcp-client) may call them.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-upstreams-from-gateway
+  labels: {{- include "urumi.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      urumi.dev/upstream-mcp: "true"
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              urumi.dev/mcp-client: "true"
+      ports:
+        - port: 8080
+---
+# 4) Gateway database: only the gateway.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-postgres-from-gateway
+  labels: {{- include "urumi.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "urumi.selector" (dict "root" . "component" "postgres") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {{- include "urumi.selector" (dict "root" . "component" "gateway") | nindent 14 }}
+      ports:
+        - port: 5432
+{{- end }}

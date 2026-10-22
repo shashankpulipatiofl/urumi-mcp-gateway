@@ -1,0 +1,70 @@
+# This store's WooCommerce MCP server. ClusterIP only: no Ingress, so it is not reachable
+# from outside the cluster; the NetworkPolicy below also limits who can call it inside.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "store.fullname" . }}-mcp
+  labels: {{- include "store.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector: {{- include "store.selector" (merge (dict "component" "mcp") .) | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "store.fullname" . }}-mcp
+  labels:
+    {{- include "store.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "store.selector" (merge (dict "component" "mcp") .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "store.labels" . | nindent 8 }}
+        app.kubernetes.io/component: mcp
+    spec:
+      {{- include "store.podSecurity" . | nindent 6 }}
+      containers:
+        - name: mcp
+          image: "{{ .Values.images.mcp.repository }}:{{ .Values.images.mcp.tag }}"
+          imagePullPolicy: {{ .Values.images.mcp.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: WOO_STORE_URL
+              value: "http://{{ include "store.fullname" . }}-wordpress.{{ .Release.Namespace }}.svc.cluster.local"
+            - name: STORE_PUBLIC_URL
+              value: {{ include "store.url" . | quote }}
+            - name: STORE_LABEL
+              value: {{ .Values.store.title | quote }}
+            - name: STORE_TIMEZONE
+              value: {{ .Values.store.timezone | quote }}
+            - name: WOO_CONSUMER_KEY
+              valueFrom: { secretKeyRef: { name: {{ include "store.secretName" . }}, key: wc-consumer-key } }
+            - name: WOO_CONSUMER_SECRET
+              valueFrom: { secretKeyRef: { name: {{ include "store.secretName" . }}, key: wc-consumer-secret } }
+            - name: MCP_AUTH_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ include "store.secretName" . }}, key: mcp-token } }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          resources: {{- toYaml .Values.resources.mcp | nindent 12 }}
+          {{- include "store.restrictedContainer" . | nindent 10 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

@@ -1,0 +1,12 @@
+apiVersion: v2
+name: urumi-platform
+description: WooCommerce hosting with a team MCP gateway - gateway, dashboard, chat agent, demo upstream MCP servers and the first store.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+dependencies:
+  - name: woocommerce-store
+    version: 1.0.0
+    repository: file://../woocommerce-store
+    alias: woocommerce
+    condition: woocommerce.enabled

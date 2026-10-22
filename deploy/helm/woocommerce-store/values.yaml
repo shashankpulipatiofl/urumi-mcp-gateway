@@ -1,0 +1,73 @@
+# ---------------------------------------------------------------------------
+# woocommerce-store: everything one store needs. Reusable: install it several
+# times (different release/nameSuffix) to run several isolated stores.
+# ---------------------------------------------------------------------------
+nameSuffix: store            # resources are named <release>-<nameSuffix>-<component>
+
+store:
+  title: "Urumi Demo Store"
+  host: store.localhost      # public hostname (Ingress)
+  scheme: http               # http locally, https in production
+  timezone: Asia/Kolkata
+  currency: INR
+  country: IN
+  adminUser: admin
+  adminEmail: admin@example.com
+  seedProducts: true
+
+# Secrets. Leave empty to auto-generate (kept stable across upgrades via `lookup`),
+# or point to an existing Secret created out-of-band (recommended in production).
+secrets:
+  existingSecret: ""         # must contain the keys listed in templates/secret.yaml
+  adminPassword: ""
+
+images:
+  store:
+    repository: urumi/store
+    tag: dev
+    pullPolicy: IfNotPresent
+  mcp:
+    repository: urumi/woocommerce-mcp
+    tag: dev
+    pullPolicy: IfNotPresent
+  mariadb:
+    repository: mariadb
+    tag: "11.4"
+    pullPolicy: IfNotPresent
+
+persistence:
+  storageClass: ""           # "" = cluster default (local-path on k3s/k3d)
+  wordpressSize: 2Gi
+  mariadbSize: 2Gi
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations: {}
+  tls: false
+  tlsSecretName: ""
+
+resources:
+  wordpress:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 768Mi }
+  mariadb:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 768Mi }
+  mcp:
+    requests: { cpu: 50m, memory: 96Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+  setup:
+    requests: { cpu: 100m, memory: 192Mi }
+    limits: { cpu: "1", memory: 512Mi }
+
+networkPolicy:
+  enabled: true
+  # Pods allowed to call this store's MCP server (the gateway carries this label)
+  mcpClientSelector:
+    urumi.dev/mcp-client: "true"
+  # Where the Ingress controller runs (k3s/k3d: Traefik in kube-system)
+  ingressController:
+    namespace: kube-system
+    podLabels:
+      app.kubernetes.io/name: traefik

@@ -1,0 +1,12 @@
+# Optional overlay: use Groq (free tier, very fast) for the chat agent instead of Gemini.
+# Groq speaks the OpenAI /chat/completions API, so the gateway's "openai" provider is used.
+#   helm upgrade --install urumi deploy/helm/urumi-platform -n urumi \
+#     -f deploy/helm/urumi-platform/values-local.yaml -f deploy/helm/urumi-platform/values-groq.yaml
+# or simply:  bash scripts/use-groq.sh
+# The API key itself lives in the Secret <release>-llm (make llm-secret KEY=gsk_...).
+llm:
+  provider: openai
+  baseUrl: https://api.groq.com/openai/v1
+  model: openai/gpt-oss-20b                              # fast, supports tool calling
+  fallbackModels: openai/gpt-oss-120b,qwen/qwen3.8-27b   # used instantly if the main one is busy/retired
+  thinking: low                                          # sends reasoning_effort=low to gpt-oss models

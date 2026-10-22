@@ -1,0 +1,6 @@
+dependencies:
+- name: woocommerce-store
+  repository: file://../woocommerce-store
+  version: 1.0.0
+digest: sha256:51630de6d0e2ee538e836c3f55602b223976f12496f3cd94696c19d9beb11feb
+generated: "2026-10-21T06:52:10.047610466Z"

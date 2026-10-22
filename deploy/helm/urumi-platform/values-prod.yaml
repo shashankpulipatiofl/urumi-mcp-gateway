@@ -1,0 +1,50 @@
+# Production-like VPS running k3s. Same chart, only these values change:
+#   domains + TLS, image registry/tags, secrets from existing Secrets, replicas, storage.
+woocommerce:
+  store:
+    host: store.example.com         # <-- your domain
+    scheme: https
+    adminEmail: ops@example.com
+  secrets:
+    existingSecret: urumi-store-secrets
+  images:
+    store: { repository: ghcr.io/YOUR_GITHUB_USER/urumi-store, tag: "1.0.0", pullPolicy: IfNotPresent }
+    mcp: { repository: ghcr.io/YOUR_GITHUB_USER/urumi-woocommerce-mcp, tag: "1.0.0", pullPolicy: IfNotPresent }
+  persistence:
+    storageClass: local-path        # k3s default; use your cloud's class on managed Kubernetes
+    wordpressSize: 10Gi
+    mariadbSize: 10Gi
+  ingress:
+    tls: true
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+
+gateway:
+  host: app.example.com             # <-- your domain
+  scheme: https
+  replicas: 2                       # stateless MCP endpoint: any replica can serve any request
+  image: { repository: ghcr.io/YOUR_GITHUB_USER/urumi-gateway, tag: "1.0.0", pullPolicy: IfNotPresent }
+  admin:
+    email: ops@example.com
+  logLevel: INFO
+
+dashboard:
+  replicas: 2
+  image: { repository: ghcr.io/YOUR_GITHUB_USER/urumi-dashboard, tag: "1.0.0", pullPolicy: IfNotPresent }
+
+demoUpstreams:
+  image: { repository: ghcr.io/YOUR_GITHUB_USER/urumi-demo-upstreams, tag: "1.0.0", pullPolicy: IfNotPresent }
+  demoTools: false
+
+secrets:
+  existingSecret: urumi-platform-secrets
+
+postgres:
+  storageSize: 5Gi
+  storageClass: local-path
+
+ingress:
+  className: traefik
+  tls: true
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod

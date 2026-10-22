@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.db
+.venv/
+venv/
+node_modules/
+dist/
+deploy/helm/urumi-platform/charts/*.tgz
+.env
+*.local.yaml
+.DS_Store
+.venv-test/

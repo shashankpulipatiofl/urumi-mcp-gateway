@@ -1,0 +1,24 @@
+# Local cluster (k3d / kind / minikube). Images are built locally and imported:
+#   make images && make import   (see README)
+woocommerce:
+  store:
+    host: store.localhost
+    scheme: http
+  images:
+    store: { repository: urumi/store, tag: dev, pullPolicy: IfNotPresent }
+    mcp: { repository: urumi/woocommerce-mcp, tag: dev, pullPolicy: IfNotPresent }
+
+gateway:
+  host: app.localhost
+  scheme: http
+  replicas: 1
+  healthIntervalSeconds: 10
+
+secrets:
+  adminPassword: "admin12345"       # convenience for local demos only; prod uses an existingSecret
+
+demoUpstreams:
+  demoTools: true                   # enables fx-rates__slow_operation to demo timeouts
+
+ingress:
+  className: traefik                # k3d/k3s ship Traefik

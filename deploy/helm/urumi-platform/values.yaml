@@ -1,0 +1,109 @@
+# ============================================================================
+# urumi-platform default values.
+# Environment differences live in values-local.yaml / values-prod.yaml.
+# ============================================================================
+
+# --- the first WooCommerce store (subchart: ../woocommerce-store) -------------
+woocommerce:
+  enabled: true
+  nameSuffix: store                 # -> <release>-store-wordpress, <release>-store-mcp, ...
+  store:
+    title: "Urumi Demo Store"
+    host: store.localhost
+    scheme: http
+    timezone: Asia/Kolkata
+    currency: INR
+  secrets:
+    existingSecret: ""
+
+# --- gateway backend -----------------------------------------------------------
+gateway:
+  host: app.localhost               # dashboard + /api + /mcp share this host
+  scheme: http
+  replicas: 1
+  image:
+    repository: urumi/gateway
+    tag: dev
+    pullPolicy: IfNotPresent
+  admin:
+    email: admin@urumi.dev
+    name: Admin
+  # Tool permissions: tools of the store's MCP server that only admins may use
+  storeAdminOnlyTools: ["create_product", "update_order_status"]
+  healthIntervalSeconds: 15
+  callTimeoutSeconds: 20
+  rateLimitPerMinute: 120
+  logLevel: INFO
+  resources:
+    requests: { cpu: 100m, memory: 192Mi }
+    limits: { cpu: "1", memory: 512Mi }
+
+# --- secrets -----------------------------------------------------------------
+# Empty values are generated once and then reused (Helm `lookup`). In production,
+# create Secrets out-of-band and reference them with existingSecret.
+secrets:
+  existingSecret: ""                # keys: secret-key, encryption-key, admin-password, postgres-password, fx-api-key
+  adminPassword: ""                 # dashboard admin password (generated if empty)
+
+# --- chat agent LLM ------------------------------------------------------------
+llm:
+  provider: gemini                  # gemini | openai (OpenAI-compatible: OpenAI, Groq, OpenRouter, Ollama...)
+  model: gemini-2.5-flash-lite      # fastest Gemini option; thinking is switched off
+  fallbackModels: gemini-flash-lite-latest,gemini-flash-latest   # used instantly if the main one is busy/retired
+  thinking: low                     # low = faster answers for simple tool lookups
+  baseUrl: ""                       # only for openai-compatible providers
+  # The API key is NEVER put in values files. Create it as a Secret:
+  #   kubectl -n urumi create secret generic urumi-llm --from-literal=api-key=YOUR_KEY
+  existingSecret: urumi-llm        # = <release>-llm (see `make llm-secret`)
+  existingSecretKey: api-key
+
+# --- dashboard (React SPA on nginx) ----------------------------------------------
+dashboard:
+  replicas: 1
+  image:
+    repository: urumi/dashboard
+    tag: dev
+    pullPolicy: IfNotPresent
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { cpu: 200m, memory: 128Mi }
+
+# --- PostgreSQL for the gateway (users, keys, servers, audit log) ------------------
+postgres:
+  image:
+    repository: postgres
+    tag: 16-alpine
+    pullPolicy: IfNotPresent
+  storageSize: 1Gi
+  storageClass: ""
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+# --- two extra upstream MCP servers (fx-rates, team-notes) ------------------------
+demoUpstreams:
+  enabled: true
+  image:
+    repository: urumi/demo-upstreams
+    tag: dev
+    pullPolicy: IfNotPresent
+  fxUseLiveRates: true              # needs egress to api.frankfurter.app; falls back to a table
+  demoTools: false                  # adds fx-rates__slow_operation for timeout demos
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits: { cpu: 300m, memory: 192Mi }
+
+# --- Ingress -----------------------------------------------------------------------
+ingress:
+  className: traefik
+  annotations: {}
+  tls: false
+  tlsSecretName: ""
+
+# --- NetworkPolicies (deny by default, allow listed paths) --------------------------
+networkPolicy:
+  enabled: true
+  ingressController:
+    namespace: kube-system
+    podLabels:
+      app.kubernetes.io/name: traefik

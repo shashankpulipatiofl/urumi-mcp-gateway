@@ -1,0 +1,32 @@
+# One public host for the team app:
+#   /api, /mcp -> gateway   (dashboard REST API + the single MCP endpoint)
+#   /          -> dashboard (static React app)
+# Same origin for the browser, so the session cookie works without CORS.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-app
+  labels: {{- include "urumi.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls }}
+  tls:
+    - hosts: [{{ .Values.gateway.host | quote }}]
+      secretName: {{ default (printf "%s-app-tls" .Release.Name) .Values.ingress.tlsSecretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.gateway.host | quote }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend: { service: { name: {{ .Release.Name }}-gateway, port: { name: http } } }
+          - path: /mcp
+            pathType: Prefix   # Prefix, not Exact: some Traefik versions ignore Exact and fall through to "/"
+            backend: { service: { name: {{ .Release.Name }}-gateway, port: { name: http } } }
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: {{ .Release.Name }}-dashboard, port: { name: http } } }

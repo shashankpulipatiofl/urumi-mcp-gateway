@@ -1,0 +1,62 @@
+{{- if .Values.networkPolicy.enabled }}
+# Isolation for this store. Each policy selects one component and lists the ONLY
+# sources allowed to reach it; anything else is dropped.
+#
+#   MariaDB   <- this store's WordPress + setup Job
+#   WordPress <- Ingress controller (storefront) + this store's MCP server
+#   MCP       <- pods labelled as MCP clients (the gateway)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "store.fullname" . }}-mariadb
+  labels: {{- include "store.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "store.selector" (merge (dict "component" "mariadb") .) | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {{- include "store.selector" (merge (dict "component" "wordpress") .) | nindent 14 }}
+        - podSelector:
+            matchLabels: {{- include "store.selector" (merge (dict "component" "setup") .) | nindent 14 }}
+      ports:
+        - port: 3306
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "store.fullname" . }}-wordpress
+  labels: {{- include "store.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "store.selector" (merge (dict "component" "wordpress") .) | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressController.namespace }}
+          podSelector:
+            matchLabels: {{- toYaml .Values.networkPolicy.ingressController.podLabels | nindent 14 }}
+        - podSelector:
+            matchLabels: {{- include "store.selector" (merge (dict "component" "mcp") .) | nindent 14 }}
+      ports:
+        - port: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "store.fullname" . }}-mcp
+  labels: {{- include "store.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "store.selector" (merge (dict "component" "mcp") .) | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {{- toYaml .Values.networkPolicy.mcpClientSelector | nindent 14 }}
+      ports:
+        - port: 8080
+{{- end }}

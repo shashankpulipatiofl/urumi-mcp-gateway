@@ -1,0 +1,75 @@
+{{- if .Values.demoUpstreams.enabled }}
+{{- $root := . -}}
+{{- range $name := list "fx-rates" "team-notes" }}
+# Upstream MCP server "{{ $name }}": cluster-internal only (ClusterIP + NetworkPolicy).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $root.Release.Name }}-{{ $name }}
+  labels: {{- include "urumi.labels" $root | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector: {{- include "urumi.selector" (dict "root" $root "component" $name) | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $root.Release.Name }}-{{ $name }}
+  labels:
+    {{- include "urumi.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+    urumi.dev/upstream-mcp: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "urumi.selector" (dict "root" $root "component" $name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "urumi.labels" $root | nindent 8 }}
+        app.kubernetes.io/component: {{ $name }}
+        urumi.dev/upstream-mcp: "true"
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: {{ $name }}
+          image: "{{ $root.Values.demoUpstreams.image.repository }}:{{ $root.Values.demoUpstreams.image.tag }}"
+          imagePullPolicy: {{ $root.Values.demoUpstreams.image.pullPolicy }}
+          command: ["python", "-m", "app.{{ $name | replace "-" "_" }}"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            {{- if eq $name "fx-rates" }}
+            - name: FX_API_KEY            # the gateway must send this as X-API-Key
+              valueFrom: { secretKeyRef: { name: {{ include "urumi.secretName" $root }}, key: fx-api-key } }
+            - name: FX_USE_LIVE
+              value: {{ $root.Values.demoUpstreams.fxUseLiveRates | quote }}
+            - name: DEMO_TOOLS
+              value: {{ $root.Values.demoUpstreams.demoTools | quote }}
+            {{- else }}
+            - name: NOTES_DB_PATH
+              value: /data/notes.db
+            {{- end }}
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          resources: {{- toYaml $root.Values.demoUpstreams.resources | nindent 12 }}
+          {{- include "urumi.restrictedContainer" (dict) | nindent 10 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: data, mountPath: /data }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+        - { name: data, emptyDir: {} }
+---
+{{- end }}
+{{- end }}

@@ -1,0 +1,87 @@
+# WordPress + WooCommerce (Apache + PHP). Files live on a PersistentVolumeClaim.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "store.fullname" . }}-wordpress
+  labels: {{- include "store.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.wordpressSize }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "store.fullname" . }}-wordpress
+  labels: {{- include "store.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector: {{- include "store.selector" (merge (dict "component" "wordpress") .) | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "store.fullname" . }}-wordpress
+  labels:
+    {{- include "store.labels" . | nindent 4 }}
+    app.kubernetes.io/component: wordpress
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # the volume is ReadWriteOnce: old pod must stop before the new one mounts it
+  selector:
+    matchLabels: {{- include "store.selector" (merge (dict "component" "wordpress") .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "store.labels" . | nindent 8 }}
+        app.kubernetes.io/component: wordpress
+    spec:
+      {{- include "store.podSecurity" . | nindent 6 }}
+      {{- if eq .Values.store.scheme "http" }}
+      # Local domains like store.localhost do not resolve inside containers. WordPress calls
+      # its own URL for WP-Cron / Action Scheduler, so map the store host to this pod.
+      hostAliases:
+        - ip: "127.0.0.1"
+          hostnames: [{{ .Values.store.host | quote }}]
+      {{- end }}
+      containers:
+        - name: wordpress
+          image: "{{ .Values.images.store.repository }}:{{ .Values.images.store.tag }}"
+          imagePullPolicy: {{ .Values.images.store.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            {{- include "store.wpEnv" . | nindent 12 }}
+          readinessProbe:
+            httpGet: { path: /wp-login.php, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet: { path: /wp-includes/images/blank.gif, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources: {{- toYaml .Values.resources.wordpress | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false   # Apache starts as root to bind :80, then drops to www-data
+          volumeMounts:
+            - name: html
+              mountPath: /var/www/html
+      volumes:
+        - name: html
+          persistentVolumeClaim:
+            claimName: {{ include "store.fullname" . }}-wordpress

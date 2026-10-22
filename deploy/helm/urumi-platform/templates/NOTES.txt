@@ -1,0 +1,21 @@
+Urumi MCP Gateway is installed in namespace {{ .Release.Namespace }}.
+
+  Dashboard + API : {{ include "urumi.publicUrl" . }}
+  MCP endpoint    : {{ include "urumi.publicUrl" . }}/mcp
+{{- if .Values.woocommerce.enabled }}
+  Storefront      : {{ .Values.woocommerce.store.scheme }}://{{ .Values.woocommerce.store.host }}
+  WP admin        : {{ .Values.woocommerce.store.scheme }}://{{ .Values.woocommerce.store.host }}/wp-admin  (user: admin)
+{{- end }}
+
+Dashboard admin: {{ .Values.gateway.admin.email }}
+  password: kubectl -n {{ .Release.Namespace }} get secret {{ include "urumi.secretName" . }} -o jsonpath='{.data.admin-password}' | base64 -d; echo
+{{- if .Values.woocommerce.enabled }}
+WordPress admin password:
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "urumi.storeSecretName" . }} -o jsonpath='{.data.wp-admin-password}' | base64 -d; echo
+{{- end }}
+
+Chat agent: create the LLM key Secret if you have not yet:
+  kubectl -n {{ .Release.Namespace }} create secret generic {{ .Values.llm.existingSecret }} --from-literal={{ .Values.llm.existingSecretKey }}=YOUR_API_KEY
+  kubectl -n {{ .Release.Namespace }} rollout restart deploy/{{ .Release.Name }}-gateway
+
+Watch everything start:  kubectl -n {{ .Release.Namespace }} get pods -w

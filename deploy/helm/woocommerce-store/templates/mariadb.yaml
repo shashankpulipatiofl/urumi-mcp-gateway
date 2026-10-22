@@ -1,0 +1,78 @@
+# MariaDB: the store's database. StatefulSet + PersistentVolumeClaim = data survives pod restarts.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "store.fullname" . }}-mariadb
+  labels: {{- include "store.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector: {{- include "store.selector" (merge (dict "component" "mariadb") .) | nindent 4 }}
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "store.fullname" . }}-mariadb
+  labels:
+    {{- include "store.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mariadb
+spec:
+  serviceName: {{ include "store.fullname" . }}-mariadb
+  replicas: 1
+  selector:
+    matchLabels: {{- include "store.selector" (merge (dict "component" "mariadb") .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "store.labels" . | nindent 8 }}
+        app.kubernetes.io/component: mariadb
+    spec:
+      {{- include "store.podSecurity" . | nindent 6 }}
+      containers:
+        - name: mariadb
+          image: "{{ .Values.images.mariadb.repository }}:{{ .Values.images.mariadb.tag }}"
+          imagePullPolicy: {{ .Values.images.mariadb.pullPolicy }}
+          ports:
+            - name: mysql
+              containerPort: 3306
+          env:
+            - name: MARIADB_DATABASE
+              value: wordpress
+            - name: MARIADB_USER
+              value: wordpress
+            - name: MARIADB_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "store.secretName" . }}, key: mariadb-password } }
+            - name: MARIADB_ROOT_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "store.secretName" . }}, key: mariadb-root-password } }
+          readinessProbe:
+            # Succeeds once the real server accepts TCP connections (the init-time temporary server
+            # listens on the socket only). "ping" needs no password, so no secret in the probe.
+            exec: { command: ["mariadb-admin", "ping", "-h", "127.0.0.1", "--silent"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: mysql }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources: {{- toYaml .Values.resources.mariadb | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.mariadbSize }}

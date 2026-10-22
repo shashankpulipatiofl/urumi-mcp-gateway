@@ -1,0 +1,125 @@
+{{- $ns := .Release.Namespace -}}
+# Upstream servers registered on first start. No secrets in here: each entry names the
+# environment variable that holds its credential, filled from a Secret below.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-gateway-config
+  labels: {{- include "urumi.labels" . | nindent 4 }}
+data:
+  seed-servers.json: {{ include "urumi.seedServers" . | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-gateway
+  labels: {{- include "urumi.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector: {{- include "urumi.selector" (dict "root" . "component" "gateway") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-gateway
+  labels:
+    {{- include "urumi.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: {{ .Values.gateway.replicas }}
+  selector:
+    matchLabels: {{- include "urumi.selector" (dict "root" . "component" "gateway") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "urumi.labels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+        urumi.dev/mcp-client: "true"      # NetworkPolicies let only pods with this label reach upstream MCP servers
+      annotations:
+        checksum/seed: {{ include "urumi.seedServers" . | sha256sum | trunc 16 }}   # restart pods when the seed list changes
+    spec:
+      automountServiceAccountToken: false   # the gateway never talks to the Kubernetes API
+      containers:
+        - name: gateway
+          image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag }}"
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "urumi.secretName" . }}, key: postgres-password } }
+            - name: DATABASE_URL
+              value: "postgresql+asyncpg://gateway:$(POSTGRES_PASSWORD)@{{ .Release.Name }}-postgres:5432/gateway"
+            - name: SECRET_KEY
+              valueFrom: { secretKeyRef: { name: {{ include "urumi.secretName" . }}, key: secret-key } }
+            - name: ENCRYPTION_KEYS
+              valueFrom: { secretKeyRef: { name: {{ include "urumi.secretName" . }}, key: encryption-key } }
+            - name: ADMIN_EMAIL
+              value: {{ .Values.gateway.admin.email | quote }}
+            - name: ADMIN_NAME
+              value: {{ .Values.gateway.admin.name | quote }}
+            - name: ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "urumi.secretName" . }}, key: admin-password } }
+            - name: SEED_SERVERS_JSON
+              valueFrom: { configMapKeyRef: { name: {{ .Release.Name }}-gateway-config, key: seed-servers.json } }
+            {{- if .Values.woocommerce.enabled }}
+            - name: SEED_WOOCOMMERCE_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ include "urumi.storeSecretName" . }}, key: mcp-token } }
+            {{- end }}
+            - name: SEED_FX_API_KEY
+              valueFrom: { secretKeyRef: { name: {{ include "urumi.secretName" . }}, key: fx-api-key } }
+            - name: ALLOWED_UPSTREAM_HOSTS
+              value: "*.{{ $ns }}.svc.cluster.local"   # SSRF policy: only this namespace's Services may be private
+            - name: PUBLIC_BASE_URL
+              value: {{ include "urumi.publicUrl" . | quote }}
+            - name: COOKIE_SECURE
+              value: {{ eq .Values.gateway.scheme "https" | quote }}
+            - name: HEALTH_INTERVAL_SECONDS
+              value: {{ .Values.gateway.healthIntervalSeconds | quote }}
+            - name: CALL_TIMEOUT_SECONDS
+              value: {{ .Values.gateway.callTimeoutSeconds | quote }}
+            - name: RATE_LIMIT_PER_MINUTE
+              value: {{ .Values.gateway.rateLimitPerMinute | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.gateway.logLevel | quote }}
+            - name: LLM_PROVIDER
+              value: {{ .Values.llm.provider | quote }}
+            - name: LLM_MODEL
+              value: {{ .Values.llm.model | quote }}
+            - name: LLM_FALLBACK_MODELS
+              value: {{ .Values.llm.fallbackModels | quote }}
+            - name: LLM_THINKING
+              value: {{ .Values.llm.thinking | quote }}
+            - name: LLM_BASE_URL
+              value: {{ .Values.llm.baseUrl | quote }}
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.llm.existingSecret }}
+                  key: {{ .Values.llm.existingSecretKey }}
+                  optional: true      # the platform runs without it; the chat page explains how to enable it
+          startupProbe:                # allow time for the database on first boot
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources: {{- toYaml .Values.gateway.resources | nindent 12 }}
+          {{- include "urumi.restrictedContainer" (dict) | nindent 10 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
