@@ -11,3 +11,8 @@ deploy/helm/urumi-platform/charts/*.tgz
 *.local.yaml
 .DS_Store
 .venv-test/
+
+# personal notes and helpers (kept local, not part of the submission)
+docs/DEMO_SCRIPT.md
+docs/LEARNING_GUIDE.md
+start-mac.sh

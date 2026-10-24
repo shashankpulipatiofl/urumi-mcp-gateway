@@ -49,7 +49,7 @@ upstream MCP server.
 | Area | Requirement | Where |
 |---|---|---|
 | Store | WordPress + WooCommerce on K8s, persistent DB + content, COD checkout | `deploy/helm/woocommerce-store`, `services/store` |
-| WooCommerce MCP | Written for this project, Streamable HTTP, `list_products`, `get_product`, `create_product`, `list_orders`, `get_order`, `update_order_status`, internal-only | `services/woocommerce-mcp` |
+| WooCommerce MCP | Written for this project, Streamable HTTP, `list_products`, `get_product`, `create_product`, `list_orders`, `get_order`, `update_order_status`, internal-only. Talks to the store through the WooCommerce REST API ([why](docs/ARCHITECTURE.md#how-the-woocommerce-mcp-server-talks-to-the-store-and-why-rest)) | `services/woocommerce-mcp` |
 | Gateway | Add / edit / disable / remove upstreams with optional bearer or header credential | `services/gateway/app/api/servers.py` |
 | | One MCP endpoint; list = all enabled servers' tools; calls routed to the right server | `services/gateway/app/upstreams.py`, `mcp_endpoint.py` |
 | | Name collisions → `<server>__<tool>` prefix scheme | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#tool-names-and-collisions) |
@@ -88,6 +88,18 @@ make up           # k3d cluster -> build 5 images -> import -> helm install  (~5
 | http://app.localhost | Dashboard: servers, team, keys, audit log, chat |
 | http://app.localhost/mcp | **The** MCP endpoint (needs `Authorization: Bearer <your key>`) |
 
+### How to place an order
+1. Open http://store.localhost → **Shop** → pick a product → **Add to cart** → **View cart** → **Proceed to checkout**.
+2. Fill any name/address/phone/email → payment method **Cash on delivery** → **Place order**.
+3. See it in http://store.localhost/wp-admin → WooCommerce → **Orders** (admin password from `make passwords`),
+   or ask the chat agent *"What orders came in today?"*.
+
+### How to use the chat agent
+Log in at http://app.localhost (`admin@urumi.dev`, password from `make passwords`) → **Chat Agent** → ask e.g.
+*"List the products"*, *"Create a product called Urumi Hoodie priced at 1499"*, *"Convert 1499 INR to USD"*.
+Each tool call appears as a chip you can expand; it runs as the logged-in user and shows up in **Audit Log**.
+The agent needs an LLM key (one-time):
+
 **Enable the chat agent.** Pick one free provider.
 
 | Provider | Setup | Notes |
@@ -100,10 +112,17 @@ Any other OpenAI-compatible API (OpenAI, OpenRouter, Ollama) works via `llm.prov
 model errors and only then reports a clear "try again" message. Every answer shows a timing line
 (total · model · AI time · tool time), which shows the gateway + tools take ~0.1 s and the rest is the LLM.
 
-**Connect Claude Code as a team member:** generate a key on *API Keys*, then
+### How to connect an external MCP client
+Dashboard → **API Keys** → **Generate key** (shown once; copy it). Then:
 ```bash
+# Claude Code
 claude mcp add --transport http urumi-gateway http://app.localhost/mcp --header "Authorization: Bearer mgw_..."
+claude        # new session → /mcp shows urumi-gateway connected
+# or MCP Inspector
+npx @modelcontextprotocol/inspector   # Transport: Streamable HTTP, URL http://app.localhost/mcp,
+                                      # header Authorization: Bearer mgw_...
 ```
+Cursor / other clients: same URL and `Authorization` header (Streamable HTTP transport).
 
 **Verify everything:** `make e2e` runs the definition-of-done checks (two users, revoke, disable, audit).
 
@@ -122,7 +141,25 @@ cluster, WordPress gets a `hostAliases` entry so it can reach its own URL (WP-Cr
 
 Same chart, different values file: `values-prod.yaml` sets real domains + TLS (cert-manager), GHCR images,
 `existingSecret`s created out of band, 2 gateway replicas and storage sizes.
-Step by step: **[docs/DEPLOY_VPS.md](docs/DEPLOY_VPS.md)**.
+
+```bash
+# 1. VPS (Ubuntu, 2 vCPU / 4 GB), DNS A records store.<domain> + app.<domain> -> VPS IP, ports 80/443 open
+curl -sfL https://get.k3s.io | sh -            # k3s: Kubernetes + Traefik + local-path storage + NetworkPolicies
+# 2. (recommended) cert-manager + a letsencrypt-prod ClusterIssuer        -> docs/DEPLOY_VPS.md §2
+# 3. images: git tag v1.0.0 && git push --tags  (CI pushes ghcr.io/<you>/urumi-*:1.0.0)
+# 4. secrets, created once outside git:                                  -> docs/DEPLOY_VPS.md §4
+kubectl create namespace urumi
+kubectl -n urumi create secret generic urumi-platform-secrets --from-literal=secret-key=... ...
+kubectl -n urumi create secret generic urumi-store-secrets   --from-literal=mariadb-password=... ...
+kubectl -n urumi create secret generic urumi-llm --from-literal=api-key=YOUR_LLM_KEY
+# 5. edit domains + image owner in values-prod.yaml, then
+helm dependency update deploy/helm/urumi-platform
+helm upgrade --install urumi deploy/helm/urumi-platform -n urumi \
+  -f deploy/helm/urumi-platform/values-prod.yaml --wait --timeout 15m
+# upgrade = same command with a new image tag; rollback:
+helm history urumi -n urumi && helm rollback urumi <REVISION> -n urumi
+```
+Full step-by-step with every secret key: **[docs/DEPLOY_VPS.md](docs/DEPLOY_VPS.md)**.
 
 ---
 
@@ -140,17 +177,33 @@ deploy/helm/
   urumi-platform/     umbrella chart: gateway, dashboard, Postgres, upstreams, Ingress, policies
 scripts/e2e_check.py  definition-of-done checks against a running deployment (repeatable: new member each run)
 scripts/use-groq.sh   switch the chat agent to Groq (values-groq.yaml overlay)
-docs/                 architecture, security, Kubernetes, demo script, VPS deploy, learning guide
+docs/                 architecture, design + tradeoffs, threat model, security, Kubernetes, VPS deploy
 ```
+
+## Stand-out items attempted
+
+| Item | Where |
+|---|---|
+| Per-tool permissions (admin-only tools hidden from `tools/list` and rejected on call) | `upstreams.py` (`admin_only_tools`), Servers page |
+| SSRF protection for upstream URLs (checked on save and before every connection) | `services/gateway/app/ssrf.py` |
+| Default-deny NetworkPolicies, upstreams reachable only from the gateway | `deploy/helm/*/templates/networkpolicy*.yaml` |
+| Upstream credential encryption at rest with key rotation (MultiFernet) | `services/gateway/app/security.py` |
+| Hardened pods: non-root, read-only root FS, no capabilities, no SA tokens | all Deployments/StatefulSets |
+| Multi-replica-safe stateless MCP endpoint (prod runs 2 gateway replicas) | `mcp_endpoint.py`, `values-prod.yaml` |
+| Per-user rate limiting + Prometheus metrics (`/metrics`) | `upstreams.py`, `main.py` |
+| Chat agent: provider-agnostic (Gemini / Groq / any OpenAI-compatible), model failover, timing line | `agent.py`, `values-groq.yaml` |
+| 34 automated tests + CI (tests, dashboard build, helm lint, kubeconform, multi-arch images to GHCR) | `services/*/tests`, `.github/workflows/ci.yml` |
+| Automated definition-of-done check with two users | `scripts/e2e_check.py` (`make e2e`) |
+| **Not attempted:** multi-store provisioning bonus (the `woocommerce-store` chart is the reusable building block for it) | `deploy/helm/woocommerce-store` |
 
 ## Documentation
 
+* **[docs/DESIGN_AND_TRADEOFFS.md](docs/DESIGN_AND_TRADEOFFS.md): the "System design and tradeoffs" note**
+* **[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md): the threat model note**
 * [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): components, how a tool call travels, MCP internals, collisions, timeouts, chat agent
 * [docs/SECURITY.md](docs/SECURITY.md): keys, credentials, roles, malicious upstreams, SSRF, network isolation
 * [docs/KUBERNETES.md](docs/KUBERNETES.md): what runs where, Secrets, volumes, Ingress, probes, upgrades and rollback
-* [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md): the definition-of-done demo, step by step, with two users
 * [docs/DEPLOY_VPS.md](docs/DEPLOY_VPS.md): local → production story
-* [docs/LEARNING_GUIDE.md](docs/LEARNING_GUIDE.md): beginner-friendly explanation of every concept + interview Q&A
 
 ## Tests
 

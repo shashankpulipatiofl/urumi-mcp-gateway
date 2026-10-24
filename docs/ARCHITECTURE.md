@@ -55,6 +55,25 @@ POST app.localhost/mcp
 The chat agent takes **the same path**: it is an MCP client of `http://127.0.0.1:8000/mcp`, using a 5-minute
 token minted for the logged-in user (see [Chat agent](#chat-agent)).
 
+## How the WooCommerce MCP server talks to the store (and why REST)
+
+The MCP server calls the **WooCommerce REST API v3** (`/wp-json/wc/v3/products`, `/orders`, …) at the
+WordPress Service's in-cluster address (`WOO_STORE_URL`, ClusterIP), with **HTTP Basic auth** using a
+WooCommerce consumer key/secret. The setup Job creates that key (read/write) and the same values come from the
+`urumi-store-secrets` Secret, so nothing is hardcoded. Each request has a 15 s timeout and errors are turned into
+clear messages. Because the traffic stays inside the cluster over plain HTTP, the client sends the standard
+reverse-proxy header `X-Forwarded-Proto: https`, which WordPress is configured to honour (WooCommerce only allows
+Basic auth over HTTPS).
+
+**Why REST instead of WP-CLI or direct database access:**
+
+| Option | Verdict |
+|---|---|
+| **REST API (chosen)** | WooCommerce's official, versioned contract. Runs all of WooCommerce's validation, hooks, stock and order logic, exactly like wp-admin. Works over the network, so the MCP server is its own small pod with its own scaling, limits and NetworkPolicy, and only needs an API key with exactly the permissions it uses |
+| WP-CLI | Needs to run *inside* the WordPress container (shared filesystem, PHP), so the MCP server would have to exec into the pod (Kubernetes API access) or be bundled with WordPress. Spawning a PHP process per call is slow. Fine for one-off setup, which is why the setup Job uses it |
+| Direct SQL on MariaDB | Bypasses WooCommerce's business logic (order totals, stock, HPOS tables, hooks) and couples us to the internal schema. Would also need DB credentials in the MCP server |
+| A WordPress plugin | The assignment says not to install an existing MCP plugin; writing one in PHP would also mix the MCP server's lifecycle with WordPress |
+
 ## MCP in 60 seconds
 
 * **MCP** (Model Context Protocol) is JSON-RPC 2.0 messages between a *client* (Claude Code, our chat agent,
